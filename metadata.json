@@ -1,0 +1,6 @@
+{
+  "name": "Oracle DJ",
+  "description": "Professional two-deck DJ workstation with live streaming for YouTube, Facebook and X, real-time scratching, 192kHz audio engine, 20-FX rack, and mastering chain.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
