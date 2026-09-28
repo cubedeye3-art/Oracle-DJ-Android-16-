@@ -1,6 +1,8 @@
 package com.example.ui
 
+import android.Manifest
 import android.content.res.Configuration
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -91,6 +93,9 @@ fun DjMainScreen(viewModel: DjViewModel) {
     val telemetry by viewModel.telemetry.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val liveStreamMetrics by viewModel.liveStreamMetrics.collectAsState()
+    val hasMediaPermission by viewModel.hasMediaPermission.collectAsState()
+    val trackLoadError by viewModel.trackLoadError.collectAsState()
+    val isLoadingTrack by viewModel.isLoadingTrack.collectAsState()
 
     var activeTab by remember { mutableStateOf(DjNavTab.DECKS) }
     var showRecordDialog by remember { mutableStateOf(false) }
@@ -108,6 +113,23 @@ fun DjMainScreen(viewModel: DjViewModel) {
     ) { uri ->
         if (uri != null) {
             viewModel.loadTrack(activeDeckTabInPortrait, uri)
+        }
+    }
+
+    val mediaPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_AUDIO
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        viewModel.onMediaPermissionResult(isGranted)
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (!hasMediaPermission) {
+            permissionLauncher.launch(mediaPermission)
         }
     }
 
@@ -328,7 +350,19 @@ fun DjMainScreen(viewModel: DjViewModel) {
                                     activeTab = DjNavTab.DECKS
                                 },
                                 onImportFileClicked = { filePickerLauncher.launch("audio/*") },
-                                onRescanClicked = { viewModel.refreshLibrary() }
+                                onRescanClicked = {
+                                    if (hasMediaPermission) {
+                                        viewModel.refreshLibrary()
+                                    } else {
+                                        permissionLauncher.launch(mediaPermission)
+                                    }
+                                },
+                                hasMediaPermission = hasMediaPermission,
+                                onRequestPermission = { permissionLauncher.launch(mediaPermission) },
+                                trackLoadError = trackLoadError,
+                                onDismissError = { viewModel.clearTrackLoadError() },
+                                isLoadingTrack = isLoadingTrack,
+                                onDeleteTrack = { viewModel.deleteTrack(it) }
                             )
                         }
                         DjNavTab.HARDWARE -> {
@@ -794,7 +828,19 @@ fun DjMainScreen(viewModel: DjViewModel) {
                                     activeTab = DjNavTab.DECKS
                                 },
                                 onImportFileClicked = { filePickerLauncher.launch("audio/*") },
-                                onRescanClicked = { viewModel.refreshLibrary() }
+                                onRescanClicked = {
+                                    if (hasMediaPermission) {
+                                        viewModel.refreshLibrary()
+                                    } else {
+                                        permissionLauncher.launch(mediaPermission)
+                                    }
+                                },
+                                hasMediaPermission = hasMediaPermission,
+                                onRequestPermission = { permissionLauncher.launch(mediaPermission) },
+                                trackLoadError = trackLoadError,
+                                onDismissError = { viewModel.clearTrackLoadError() },
+                                isLoadingTrack = isLoadingTrack,
+                                onDeleteTrack = { viewModel.deleteTrack(it) }
                             )
                         }
 

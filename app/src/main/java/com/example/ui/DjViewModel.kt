@@ -1,10 +1,18 @@
 package com.example.ui
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.audio.decoder.SampleTrackGenerator
+import com.example.audio.decoder.TrackLoadError
+import com.example.audio.decoder.TrackLoadErrorCode
+import com.example.audio.decoder.TrackLoadException
 import com.example.audio.decoder.UniversalAudioDecoder
 import com.example.audio.engine.AudioDeviceManager
 import com.example.audio.engine.AudioOutputEngine
@@ -76,6 +84,15 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
     val telemetry: StateFlow<EngineTelemetry> = _telemetry.asStateFlow()
 
     val liveStreamMetrics: StateFlow<LiveStreamMetrics> = liveStreamBroadcaster.metrics
+
+    private val _trackLoadError = MutableStateFlow<TrackLoadError?>(null)
+    val trackLoadError: StateFlow<TrackLoadError?> = _trackLoadError.asStateFlow()
+
+    private val _hasMediaPermission = MutableStateFlow(checkMediaPermission())
+    val hasMediaPermission: StateFlow<Boolean> = _hasMediaPermission.asStateFlow()
+
+    private val _isLoadingTrack = MutableStateFlow(false)
+    val isLoadingTrack: StateFlow<Boolean> = _isLoadingTrack.asStateFlow()
 
     val tracks: StateFlow<List<TrackEntity>> = repository.allTracks.stateIn(
         scope = viewModelScope,
@@ -387,32 +404,121 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
     // Track loading
     fun loadTrack(deckId: DeckId, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
+            _trackLoadError.value = null
+            _isLoadingTrack.value = true
+            val target = if (deckId == DeckId.DECK_A) deckA else deckB
+            Log.d("BEATENGINE_LOAD", "BEATENGINE_LOAD: loadTrack URI called for deck $deckId, URI: $uri")
+
             try {
                 val decoded = UniversalAudioDecoder.decodeUri(getApplication(), uri)
-                val target = if (deckId == DeckId.DECK_A) deckA else deckB
                 target.loadTrack(decoded.buffer, decoded.metadata)
+                Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded URI track ${decoded.metadata.title}")
+
+                // Save imported file into track library
+                val track = TrackEntity(
+                    title = decoded.metadata.title,
+                    artist = decoded.metadata.artist,
+                    durationSeconds = decoded.metadata.durationSeconds,
+                    bpm = target.originalBpm,
+                    musicalKey = target.musicalKey,
+                    filePath = uri.toString(),
+                    sampleRate = decoded.metadata.sampleRate,
+                    bitDepth = decoded.metadata.bitDepth,
+                    channels = decoded.metadata.channels,
+                    formatName = decoded.metadata.formatName
+                )
+                repository.saveTrack(track)
+                Log.d("BEATENGINE_LOAD", "Imported track persisted to database: ${track.title}")
+            } catch (e: TrackLoadException) {
+                Log.e("BEATENGINE_LOAD", "Failed to load track URI $uri: [${e.code}] ${e.message}", e)
+                _trackLoadError.value = TrackLoadError(
+                    code = e.code,
+                    technicalMessage = e.message ?: "Failed to load track URI",
+                    uriString = uri.toString()
+                )
             } catch (e: Exception) {
-                // Error loading track
+                Log.e("BEATENGINE_LOAD", "Unexpected error loading track URI $uri: ${e.message}", e)
+                _trackLoadError.value = TrackLoadError(
+                    code = TrackLoadErrorCode.DECK_LOAD_FAILURE,
+                    technicalMessage = e.message ?: "Failed to load track URI",
+                    uriString = uri.toString()
+                )
+            } finally {
+                _isLoadingTrack.value = false
             }
         }
     }
 
     fun loadTrackEntity(deckId: DeckId, entity: TrackEntity) {
         viewModelScope.launch(Dispatchers.IO) {
+            _trackLoadError.value = null
+            _isLoadingTrack.value = true
             val target = if (deckId == DeckId.DECK_A) deckA else deckB
-            if (entity.filePath.startsWith("asset://")) {
-                val decoded = if (entity.filePath.contains("techno")) {
-                    SampleTrackGenerator.generateDeckATrack()
-                } else {
-                    SampleTrackGenerator.generateDeckBTrack()
+            Log.d(
+                "BEATENGINE_LOAD",
+                "BEATENGINE_LOAD: loadTrackEntity called for deck $deckId, track: ${entity.title}, path: ${entity.filePath}"
+            )
+
+            try {
+                if (entity.filePath.startsWith("asset://")) {
+                    Log.d("BEATENGINE_LOAD", "Loading synthetic control track: ${entity.filePath}")
+                    val decoded = if (entity.filePath.contains("techno")) {
+                        SampleTrackGenerator.generateDeckATrack()
+                    } else {
+                        SampleTrackGenerator.generateDeckBTrack()
+                    }
+                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded synthetic track ${entity.title}")
+                    return@launch
                 }
-                target.loadTrack(decoded.buffer, decoded.metadata)
-            } else {
+
+                // If path is a content URI (from MediaStore or FilePicker)
+                if (entity.filePath.startsWith("content://")) {
+                    val uri = Uri.parse(entity.filePath)
+                    val decoded = UniversalAudioDecoder.decodeUri(getApplication(), uri)
+                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded content URI ${decoded.metadata.title}")
+                    return@launch
+                }
+
+                // If path is a local filesystem file
                 val file = File(entity.filePath)
-                if (file.exists()) {
+                if (file.exists() && file.canRead()) {
                     val decoded = UniversalAudioDecoder.decodeFile(file)
                     target.loadTrack(decoded.buffer, decoded.metadata)
+                    Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded file ${file.name}")
+                    return@launch
                 }
+
+                // Try parsing as generic URI
+                val parsedUri = Uri.parse(entity.filePath)
+                if (parsedUri.scheme != null) {
+                    val decoded = UniversalAudioDecoder.decodeUri(getApplication(), parsedUri)
+                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded parsed URI $parsedUri")
+                    return@launch
+                }
+
+                throw TrackLoadException(
+                    TrackLoadErrorCode.FILE_NOT_FOUND,
+                    "Audio file path is not accessible: ${entity.filePath}"
+                )
+            } catch (e: TrackLoadException) {
+                Log.e("BEATENGINE_LOAD", "Failed to load track URI ${entity.filePath}: [${e.code}] ${e.message}", e)
+                _trackLoadError.value = TrackLoadError(
+                    code = e.code,
+                    technicalMessage = e.message ?: "Failed to load track URI",
+                    uriString = entity.filePath
+                )
+            } catch (e: Exception) {
+                Log.e("BEATENGINE_LOAD", "Unexpected error loading track ${entity.filePath}: ${e.message}", e)
+                _trackLoadError.value = TrackLoadError(
+                    code = TrackLoadErrorCode.DECK_LOAD_FAILURE,
+                    technicalMessage = e.message ?: "Failed to load track URI",
+                    uriString = entity.filePath
+                )
+            } finally {
+                _isLoadingTrack.value = false
             }
         }
     }
@@ -475,6 +581,39 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshLibrary() {
         viewModelScope.launch(Dispatchers.IO) {
             repository.scanDeviceMedia()
+        }
+    }
+
+    fun checkMediaPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return ContextCompat.checkSelfPermission(getApplication(), permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun onMediaPermissionResult(granted: Boolean) {
+        _hasMediaPermission.value = granted
+        if (granted) {
+            Log.d("DjViewModel", "Media permission granted by user. Scanning MediaStore...")
+            refreshLibrary()
+        } else {
+            Log.w("DjViewModel", "Media permission denied by user.")
+            _trackLoadError.value = TrackLoadError(
+                code = TrackLoadErrorCode.PERMISSION_DENIED,
+                technicalMessage = "Storage/media permission was denied. Cannot scan device library."
+            )
+        }
+    }
+
+    fun clearTrackLoadError() {
+        _trackLoadError.value = null
+    }
+
+    fun deleteTrack(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteTrack(id)
         }
     }
 

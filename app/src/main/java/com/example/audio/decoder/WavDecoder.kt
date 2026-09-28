@@ -1,13 +1,14 @@
 package com.example.audio.decoder
 
+import android.util.Log
 import com.example.audio.model.AudioBuffer
 import com.example.audio.model.AudioMetadata
 import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.log10
-import kotlin.math.max
 import kotlin.math.sqrt
 
 object WavDecoder {
@@ -18,8 +19,12 @@ object WavDecoder {
     )
 
     fun decode(file: File): DecodeResult {
-        file.inputStream().use { stream ->
-            return decode(stream, file.name, file.length(), file.absolutePath)
+        Log.d("WavDecoder", "WavDecoder: decode called for file: ${file.absolutePath} (size: ${file.length()} bytes)")
+        if (!file.exists()) {
+            throw TrackLoadException(TrackLoadErrorCode.FILE_NOT_FOUND, "WAV file does not exist: ${file.absolutePath}")
+        }
+        return file.inputStream().use { stream ->
+            decode(stream, file.name, file.length(), file.absolutePath)
         }
     }
 
@@ -29,22 +34,48 @@ object WavDecoder {
         fileSizeBytes: Long = 0L,
         filePath: String = ""
     ): DecodeResult {
-        val bytes = inputStream.readBytes()
+        Log.d("WavDecoder", "WavDecoder: decode start for $filename ($filePath)")
+
+        val bytes: ByteArray
+        try {
+            bytes = inputStream.readBytes()
+        } catch (e: OutOfMemoryError) {
+            throw TrackLoadException(
+                TrackLoadErrorCode.OUT_OF_MEMORY,
+                "Out of memory reading WAV data for $filename: ${e.message}"
+            )
+        } catch (e: Exception) {
+            throw TrackLoadException(
+                TrackLoadErrorCode.FILE_NOT_FOUND,
+                "Error reading WAV stream for $filename: ${e.message}",
+                e
+            )
+        }
+
+        if (bytes.size < 44) {
+            throw TrackLoadException(
+                TrackLoadErrorCode.UNSUPPORTED_FORMAT,
+                "File too small to be a valid WAV file (${bytes.size} bytes)"
+            )
+        }
+
         val byteBuffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
 
         // Read RIFF header
-        if (bytes.size < 44) {
-            throw IllegalArgumentException("File is too small to be a valid WAV/RIFF file")
-        }
-
         val riffHeader = String(bytes, 0, 4)
         if (riffHeader != "RIFF") {
-            throw IllegalArgumentException("Invalid RIFF header: $riffHeader")
+            throw TrackLoadException(
+                TrackLoadErrorCode.UNSUPPORTED_FORMAT,
+                "Invalid RIFF header: $riffHeader"
+            )
         }
 
         val waveHeader = String(bytes, 8, 4)
         if (waveHeader != "WAVE") {
-            throw IllegalArgumentException("Invalid WAVE identifier: $waveHeader")
+            throw TrackLoadException(
+                TrackLoadErrorCode.UNSUPPORTED_FORMAT,
+                "Invalid WAVE identifier: $waveHeader"
+            )
         }
 
         var offset = 12
@@ -62,16 +93,18 @@ object WavDecoder {
 
             when (chunkId) {
                 "fmt " -> {
-                    if (chunkSize >= 16) {
+                    if (chunkSize >= 16 && chunkDataStart + 16 <= bytes.size) {
                         audioFormat = byteBuffer.getShort(chunkDataStart).toInt() and 0xFFFF
                         channels = byteBuffer.getShort(chunkDataStart + 2).toInt() and 0xFFFF
                         sampleRate = byteBuffer.getInt(chunkDataStart + 4)
                         bitsPerSample = byteBuffer.getShort(chunkDataStart + 14).toInt() and 0xFFFF
 
-                        if (audioFormat == 65534 && chunkSize >= 40) { // WAVE_FORMAT_EXTENSIBLE
+                        if (audioFormat == 65534 && chunkSize >= 40 && chunkDataStart + 26 <= bytes.size) {
+                            // WAVE_FORMAT_EXTENSIBLE: subFormat GUID first two bytes is format code
                             val subFormat = byteBuffer.getShort(chunkDataStart + 24).toInt() and 0xFFFF
                             audioFormat = subFormat
                         }
+                        Log.d("WavDecoder", "WavDecoder: fmt chunk parsed - format=$audioFormat, channels=$channels, sampleRate=$sampleRate, bitsPerSample=$bitsPerSample")
                     }
                 }
                 "data" -> {
@@ -81,6 +114,7 @@ object WavDecoder {
                     } else {
                         bytes.size - chunkDataStart
                     }
+                    Log.d("WavDecoder", "WavDecoder: data chunk found at offset $dataOffset, size $dataSize")
                     break
                 }
             }
@@ -92,17 +126,39 @@ object WavDecoder {
         }
 
         if (dataOffset < 0) {
-            throw IllegalArgumentException("Missing 'data' chunk in WAV file")
+            throw TrackLoadException(
+                TrackLoadErrorCode.UNSUPPORTED_FORMAT,
+                "Missing 'data' chunk in WAV file ($filename)"
+            )
         }
 
         val bytesPerSample = bitsPerSample / 8
         if (bytesPerSample <= 0 || channels <= 0) {
-            throw IllegalArgumentException("Invalid WAV parameters: bits=$bitsPerSample, channels=$channels")
+            throw TrackLoadException(
+                TrackLoadErrorCode.INVALID_PCM_FORMAT,
+                "Invalid WAV parameters: bits=$bitsPerSample, channels=$channels"
+            )
         }
 
         val totalFrames = dataSize / (channels * bytesPerSample)
-        val left = FloatArray(totalFrames)
-        val right = FloatArray(totalFrames)
+        if (totalFrames <= 0) {
+            throw TrackLoadException(
+                TrackLoadErrorCode.EMPTY_AUDIO,
+                "WAV file contains 0 audio frames"
+            )
+        }
+
+        val left: FloatArray
+        val right: FloatArray
+        try {
+            left = FloatArray(totalFrames)
+            right = FloatArray(totalFrames)
+        } catch (e: OutOfMemoryError) {
+            throw TrackLoadException(
+                TrackLoadErrorCode.OUT_OF_MEMORY,
+                "Out of memory allocating $totalFrames audio frames for $filename: ${e.message}"
+            )
+        }
 
         var readPos = dataOffset
         var maxAbs = 0f
@@ -112,7 +168,7 @@ object WavDecoder {
             for (c in 0 until channels) {
                 val sampleValue: Float = when (bitsPerSample) {
                     8 -> {
-                        // 8-bit WAV is unsigned (0 .. 255, 128 is center)
+                        // 8-bit WAV is unsigned PCM (0..255, 128 is 0.0)
                         val uVal = bytes[readPos].toInt() and 0xFF
                         readPos += 1
                         (uVal - 128) / 128.0f
@@ -125,9 +181,10 @@ object WavDecoder {
                     24 -> {
                         val b0 = bytes[readPos].toInt() and 0xFF
                         val b1 = bytes[readPos + 1].toInt() and 0xFF
-                        val b2 = bytes[readPos + 2].toInt()
+                        val b2 = bytes[readPos + 2].toInt() and 0xFF
                         readPos += 3
-                        val s24 = (b2 shl 16) or (b1 shl 8) or b0
+                        val raw = (b2 shl 16) or (b1 shl 8) or b0
+                        val s24 = if ((raw and 0x800000) != 0) (raw or -0x1000000) else raw
                         s24 / 8388608.0f
                     }
                     32 -> {
@@ -152,13 +209,13 @@ object WavDecoder {
                 if (c == 0) {
                     left[i] = sampleValue
                     if (channels == 1) {
-                        right[i] = sampleValue
+                        right[i] = sampleValue // Mono duplicate to right
                     }
                 } else if (c == 1) {
                     right[i] = sampleValue
                 }
 
-                val absVal = kotlin.math.abs(sampleValue)
+                val absVal = abs(sampleValue)
                 if (absVal > maxAbs) maxAbs = absVal
                 sumSquares += (sampleValue * sampleValue)
             }
@@ -175,8 +232,11 @@ object WavDecoder {
             bitsPerSample == 24 -> "WAV 24-bit PCM"
             bitsPerSample == 32 -> "WAV 32-bit PCM"
             bitsPerSample == 16 -> "WAV 16-bit PCM"
+            bitsPerSample == 8 -> "WAV 8-bit PCM"
             else -> "WAV ${bitsPerSample}-bit"
         }
+
+        Log.d("WavDecoder", "WavDecoder: decode complete - format=$formatDesc, sampleRate=$sampleRate, channels=$channels, frames=$totalFrames, duration=${durationSec}s")
 
         val metadata = AudioMetadata(
             title = filename.substringBeforeLast("."),
@@ -201,6 +261,7 @@ object WavDecoder {
             channels = channels
         )
 
+        Log.d("WavDecoder", "AudioBuffer created: $buffer")
         return DecodeResult(buffer, metadata)
     }
 }
