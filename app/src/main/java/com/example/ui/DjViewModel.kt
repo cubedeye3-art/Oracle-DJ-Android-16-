@@ -100,6 +100,8 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
+    val libraryAnalysisProgress = repository.analysisProgress
+
     val projects: StateFlow<List<ProjectEntity>> = repository.allProjects.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -335,6 +337,18 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
         mixer.setMasterGain(gain)
     }
 
+    fun toggleCueMonitor(deckId: DeckId) {
+        if (deckId == DeckId.DECK_A) {
+            val cur = mixer.state.channelA.cueMonitor
+            mixer.state = mixer.state.copy(channelA = mixer.state.channelA.copy(cueMonitor = !cur))
+            deckA.cueMonitor = !cur
+        } else {
+            val cur = mixer.state.channelB.cueMonitor
+            mixer.state = mixer.state.copy(channelB = mixer.state.channelB.copy(cueMonitor = !cur))
+            deckB.cueMonitor = !cur
+        }
+    }
+
     // FX Controls
     fun setFxEnabled(deckId: DeckId, enabled: Boolean) {
         val rack = if (deckId == DeckId.DECK_A) deckA.fxRack else deckB.fxRack
@@ -414,13 +428,20 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
                 target.loadTrack(decoded.buffer, decoded.metadata)
                 Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded URI track ${decoded.metadata.title}")
 
-                // Save imported file into track library
+                // Save imported file into track library with analysis cached
                 val track = TrackEntity(
                     title = decoded.metadata.title,
                     artist = decoded.metadata.artist,
+                    album = "",
                     durationSeconds = decoded.metadata.durationSeconds,
                     bpm = target.originalBpm,
+                    bpmConfidence = 0.95f,
                     musicalKey = target.musicalKey,
+                    keyConfidence = 0.90f,
+                    beatInterval = if (target.originalBpm > 0) 60.0 / target.originalBpm else 0.0,
+                    firstBeatOffset = target.firstBeatOffsetFrames / 48000.0,
+                    analysisVersion = com.example.audio.analysis.BpmDetector.ANALYSIS_VERSION,
+                    analysisTimestamp = System.currentTimeMillis(),
                     filePath = uri.toString(),
                     sampleRate = decoded.metadata.sampleRate,
                     bitDepth = decoded.metadata.bitDepth,
@@ -459,6 +480,10 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
                 "BEATENGINE_LOAD: loadTrackEntity called for deck $deckId, track: ${entity.title}, path: ${entity.filePath}"
             )
 
+            val cachedBpm = if (entity.bpm > 0.0 && entity.analysisVersion >= com.example.audio.analysis.BpmDetector.ANALYSIS_VERSION) entity.bpm else null
+            val cachedKey = if (entity.musicalKey.isNotBlank()) entity.musicalKey else null
+            val cachedOffset = if (entity.firstBeatOffset > 0.0) entity.firstBeatOffset else null
+
             try {
                 if (entity.filePath.startsWith("asset://")) {
                     Log.d("BEATENGINE_LOAD", "Loading synthetic control track: ${entity.filePath}")
@@ -467,7 +492,7 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         SampleTrackGenerator.generateDeckBTrack()
                     }
-                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    target.loadTrack(decoded.buffer, decoded.metadata, cachedBpm, cachedKey, cachedOffset)
                     Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded synthetic track ${entity.title}")
                     return@launch
                 }
@@ -476,8 +501,24 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
                 if (entity.filePath.startsWith("content://")) {
                     val uri = Uri.parse(entity.filePath)
                     val decoded = UniversalAudioDecoder.decodeUri(getApplication(), uri)
-                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    target.loadTrack(decoded.buffer, decoded.metadata, cachedBpm, cachedKey, cachedOffset)
                     Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded content URI ${decoded.metadata.title}")
+
+                    // If previously unanalyzed, update DB
+                    if (entity.bpm <= 0.0 && target.originalBpm > 0.0) {
+                        repository.saveTrack(
+                            entity.copy(
+                                bpm = target.originalBpm,
+                                bpmConfidence = 0.95f,
+                                musicalKey = target.musicalKey,
+                                keyConfidence = 0.90f,
+                                beatInterval = if (target.originalBpm > 0) 60.0 / target.originalBpm else 0.0,
+                                firstBeatOffset = target.firstBeatOffsetFrames / 48000.0,
+                                analysisVersion = com.example.audio.analysis.BpmDetector.ANALYSIS_VERSION,
+                                analysisTimestamp = System.currentTimeMillis()
+                            )
+                        )
+                    }
                     return@launch
                 }
 
@@ -485,8 +526,23 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
                 val file = File(entity.filePath)
                 if (file.exists() && file.canRead()) {
                     val decoded = UniversalAudioDecoder.decodeFile(file)
-                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    target.loadTrack(decoded.buffer, decoded.metadata, cachedBpm, cachedKey, cachedOffset)
                     Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded file ${file.name}")
+
+                    if (entity.bpm <= 0.0 && target.originalBpm > 0.0) {
+                        repository.saveTrack(
+                            entity.copy(
+                                bpm = target.originalBpm,
+                                bpmConfidence = 0.95f,
+                                musicalKey = target.musicalKey,
+                                keyConfidence = 0.90f,
+                                beatInterval = if (target.originalBpm > 0) 60.0 / target.originalBpm else 0.0,
+                                firstBeatOffset = target.firstBeatOffsetFrames / 48000.0,
+                                analysisVersion = com.example.audio.analysis.BpmDetector.ANALYSIS_VERSION,
+                                analysisTimestamp = System.currentTimeMillis()
+                            )
+                        )
+                    }
                     return@launch
                 }
 
@@ -494,7 +550,7 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
                 val parsedUri = Uri.parse(entity.filePath)
                 if (parsedUri.scheme != null) {
                     val decoded = UniversalAudioDecoder.decodeUri(getApplication(), parsedUri)
-                    target.loadTrack(decoded.buffer, decoded.metadata)
+                    target.loadTrack(decoded.buffer, decoded.metadata, cachedBpm, cachedKey, cachedOffset)
                     Log.d("BEATENGINE_LOAD", "deck load successful: Deck $deckId loaded parsed URI $parsedUri")
                     return@launch
                 }
@@ -523,11 +579,15 @@ class DjViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun scanAndAnalyseLibrary() {
+        repository.startScanAndAnalyseLibrary()
+    }
+
     fun startRecording(preMaster: Boolean = false, sampleRate: Int = 48000, bitDepth: Int = 24): File {
         val app = getApplication<Application>()
         val dir = app.getExternalFilesDir("Recordings") ?: app.filesDir
         dir.mkdirs()
-        val file = File(dir, "OracleDJ_Mix_${System.currentTimeMillis()}.wav")
+        val file = File(dir, "BeatEngine_Mix_${System.currentTimeMillis()}.wav")
         outputEngine.startRecording(file, sampleRate, bitDepth, preMaster)
         isRecordingMaster = true
         return file

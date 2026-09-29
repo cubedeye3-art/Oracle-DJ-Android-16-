@@ -54,12 +54,12 @@ class DeckAudioPlayer(
     @Volatile var quantize: Boolean = true
 
     // BPM & Beat Grid
-    @Volatile var originalBpm: Double = 126.0
-    @Volatile var currentBpm: Double = 126.0
-    @Volatile var beatIntervalFrames: Double = (48000.0 * 60.0 / 126.0)
+    @Volatile var originalBpm: Double = 0.0
+    @Volatile var currentBpm: Double = 0.0
+    @Volatile var beatIntervalFrames: Double = 0.0
     @Volatile var firstBeatOffsetFrames: Double = 0.0
-    @Volatile var musicalKey: String = "8A / Am"
-    @Volatile var camelotKey: String = "8A"
+    @Volatile var musicalKey: String = "--"
+    @Volatile var camelotKey: String = "--"
 
     // Loops
     @Volatile var loopState: LoopState = LoopState()
@@ -106,11 +106,17 @@ class DeckAudioPlayer(
             filter.setSampleRate(sr)
             fxRack.setSampleRate(sr)
             timeStretcher.setSampleRate(sr)
-            beatIntervalFrames = (sampleRate * 60.0 / currentBpm)
+            beatIntervalFrames = if (currentBpm > 0.0) (sampleRate * 60.0 / currentBpm) else 0.0
         }
     }
 
-    fun loadTrack(newBuffer: AudioBuffer, newMetadata: AudioMetadata) {
+    fun loadTrack(
+        newBuffer: AudioBuffer,
+        newMetadata: AudioMetadata,
+        cachedBpm: Double? = null,
+        cachedKey: String? = null,
+        cachedFirstBeatOffsetSec: Double? = null
+    ) {
         buffer = newBuffer
         metadata = newMetadata
         currentFramePosition = 0.0
@@ -120,16 +126,27 @@ class DeckAudioPlayer(
         isScratching = false
         scratchVelocityRate = 0.0
 
-        // Asynchronous / fast analysis
-        val bpmRes = BpmDetector.detect(newBuffer)
-        originalBpm = bpmRes.bpm
-        currentBpm = bpmRes.bpm * (1.0 + tempoPercent * pitchRange.maxPercent)
-        beatIntervalFrames = (sampleRate * 60.0 / originalBpm)
-        firstBeatOffsetFrames = bpmRes.firstBeatOffsetSeconds * sampleRate
+        if (cachedBpm != null && cachedBpm > 0.0) {
+            originalBpm = cachedBpm
+            currentBpm = cachedBpm * (1.0 + tempoPercent * pitchRange.maxPercent)
+            beatIntervalFrames = (sampleRate * 60.0 / originalBpm)
+            firstBeatOffsetFrames = (cachedFirstBeatOffsetSec ?: 0.0) * sampleRate
+        } else {
+            val bpmRes = BpmDetector.detect(newBuffer)
+            originalBpm = bpmRes.bpm
+            currentBpm = if (bpmRes.bpm > 0) bpmRes.bpm * (1.0 + tempoPercent * pitchRange.maxPercent) else 0.0
+            beatIntervalFrames = if (originalBpm > 0) (sampleRate * 60.0 / originalBpm) else (sampleRate * 0.5)
+            firstBeatOffsetFrames = bpmRes.firstBeatOffsetSeconds * sampleRate
+        }
 
-        val keyRes = KeyDetector.detect(newBuffer)
-        musicalKey = "${keyRes.camelotCode} / ${keyRes.keyName}"
-        camelotKey = keyRes.camelotCode
+        if (!cachedKey.isNullOrBlank() && cachedKey != "--") {
+            musicalKey = cachedKey
+            camelotKey = cachedKey.substringBefore(" ").substringBefore("/")
+        } else {
+            val keyRes = KeyDetector.detect(newBuffer)
+            musicalKey = if (keyRes.keyName.isNotBlank()) "${keyRes.camelotCode} / ${keyRes.keyName}" else "--"
+            camelotKey = keyRes.camelotCode.ifBlank { "--" }
+        }
 
         waveformData = WaveformAnalyzer.analyze(newBuffer)
 
@@ -224,8 +241,9 @@ class DeckAudioPlayer(
     fun setTempo(percent: Float) {
         tempoPercent = percent.coerceIn(-1.0f, 1.0f)
         val rateFactor = 1.0 + (tempoPercent * pitchRange.maxPercent)
-        currentBpm = originalBpm * rateFactor
-        fxRack.currentBpm = currentBpm
+        currentBpm = if (originalBpm > 0.0) originalBpm * rateFactor else 0.0
+        beatIntervalFrames = if (currentBpm > 0.0) (sampleRate * 60.0 / currentBpm) else 0.0
+        fxRack.currentBpm = if (currentBpm > 0.0) currentBpm else 120.0
     }
 
     fun setPitchRange(range: PitchRange) {

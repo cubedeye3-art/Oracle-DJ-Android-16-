@@ -207,7 +207,7 @@ fun DeckScrollingWaveform(
             }
 
             // Beat Grid Lines
-            if (beatIntervalSec > 0) {
+            if (bpm > 0.0 && beatIntervalSec > 0) {
                 val firstBeatSec = (startSec - (startSec % beatIntervalSec))
                 var bSec = firstBeatSec
                 while (bSec <= endSec) {

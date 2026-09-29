@@ -6,8 +6,8 @@ data class DeckUiState(
     val playState: PlayState = PlayState.STOPPED,
     val currentPositionSeconds: Double = 0.0,
     val durationSeconds: Double = 0.0,
-    val currentBpm: Double = 126.0,
-    val originalBpm: Double = 126.0,
+    val currentBpm: Double = 0.0,
+    val originalBpm: Double = 0.0,
     val tempoPercent: Float = 0.0f, // -1.0 .. +1.0
     val pitchRange: PitchRange = PitchRange.EIGHT,
     val keyLock: Boolean = true,
@@ -16,8 +16,8 @@ data class DeckUiState(
     val vinylMode: Boolean = true,
     val reverse: Boolean = false,
     val quantize: Boolean = true,
-    val musicalKey: String = "11B / A",
-    val camelotKey: String = "11B",
+    val musicalKey: String = "--",
+    val camelotKey: String = "--",
     val phaseOffset: Float = 0.0f, // -0.5 .. +0.5 beats
     val beatNumber: Int = 1,
     val cuePositionSeconds: Double = 0.0,

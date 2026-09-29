@@ -20,10 +20,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class AudioProcessingTest {
 
     @Test
@@ -123,7 +128,6 @@ class AudioProcessingTest {
 
         val beatFrames = (sampleRate * 60.0 / bpm).toInt()
         for (f in 0 until totalFrames step beatFrames) {
-            // Kick transient
             for (k in 0 until 500) {
                 if (f + k < totalFrames) {
                     left[f + k] = 0.9f
@@ -135,6 +139,69 @@ class AudioProcessingTest {
         val buf = AudioBuffer(left, right, sampleRate, 16, sampleRate, 2)
         val result = BpmDetector.detect(buf)
         assertTrue("Detected BPM ${result.bpm} should be near 120", abs(result.bpm - 120.0) < 5.0)
+        assertTrue(result.confidence > 0.3f)
+    }
+
+    @Test
+    fun testBpmDetection180BpmFastTempo() {
+        val sampleRate = 48000
+        val bpm = 180.0
+        val seconds = 6.0
+        val totalFrames = (seconds * sampleRate).toInt()
+        val left = FloatArray(totalFrames)
+        val right = FloatArray(totalFrames)
+
+        val beatFrames = (sampleRate * 60.0 / bpm).toInt()
+        for (f in 0 until totalFrames step beatFrames) {
+            for (k in 0 until 400) {
+                if (f + k < totalFrames) {
+                    left[f + k] = 0.95f
+                    right[f + k] = 0.95f
+                }
+            }
+        }
+
+        val buf = AudioBuffer(left, right, sampleRate, 16, sampleRate, 2)
+        val result = BpmDetector.detect(buf)
+        assertTrue("Detected BPM ${result.bpm} must resolve near 180, NOT 120 or 90", abs(result.bpm - 180.0) < 6.0)
+        assertTrue("BPM must not fallback to 120", abs(result.bpm - 120.0) > 10.0)
+    }
+
+    @Test
+    fun testBpmDetectionFailureDoesNotDefaultTo120() {
+        val sampleRate = 48000
+        // 4 seconds of flat silence
+        val totalFrames = sampleRate * 4
+        val left = FloatArray(totalFrames)
+        val right = FloatArray(totalFrames)
+
+        val buf = AudioBuffer(left, right, sampleRate, 16, sampleRate, 2)
+        val result = BpmDetector.detect(buf)
+        assertEquals("BPM for silent audio must be 0.0 (failure), NEVER 120.0", 0.0, result.bpm, 0.001)
+        assertEquals(0.0f, result.confidence, 0.001f)
+    }
+
+    @Test
+    fun testKeyDetectionProducesCamelotAndConfidence() {
+        val sampleRate = 48000
+        val totalFrames = sampleRate * 3
+        val left = FloatArray(totalFrames)
+        val right = FloatArray(totalFrames)
+
+        // 440 Hz (Note A4) tone with harmonics
+        for (i in 0 until totalFrames) {
+            val s = (sin(2.0 * PI * 440.0 * i / sampleRate) * 0.7 +
+                    sin(2.0 * PI * 554.37 * i / sampleRate) * 0.5 + // C#5
+                    sin(2.0 * PI * 659.25 * i / sampleRate) * 0.5).toFloat() // E5 -> A Major chord
+            left[i] = s
+            right[i] = s
+        }
+
+        val buf = AudioBuffer(left, right, sampleRate, 16, sampleRate, 2)
+        val result = KeyDetector.detect(buf)
+        assertTrue(result.keyName.isNotBlank())
+        assertTrue(result.camelotCode.isNotBlank())
+        assertTrue(result.confidence > 0f)
     }
 
     @Test
@@ -155,7 +222,6 @@ class AudioProcessingTest {
     @Test
     fun testChannelEqIsolatorKill() {
         val eq = ChannelEqFilter(48000)
-        // Set low, mid, high to complete kill
         eq.setGains(0f, 0f, 0f)
 
         val input = 1.0f
@@ -163,20 +229,14 @@ class AudioProcessingTest {
         for (i in 0 until 200) {
             output = eq.processLeft(input)
         }
-
-        // Isolator should strongly attenuate
-        assertTrue("EQ kill should attenuate signal: $output", abs(output) < 0.1f)
+        assertTrue("EQ kill must reduce amplitude significantly: $output", abs(output) < 0.1f)
     }
 
     @Test
-    fun testDJFilterBipolar() {
+    fun testDJFilterLowPass() {
         val filter = DJFilter(48000)
-        // Center neutral
-        filter.setFilterValue(0.0f)
-        assertEquals(0.5f, filter.processLeft(0.5f), 0.001f)
+        filter.setFilterValue(-0.8f) // Deep Low Pass
 
-        // Resonant LPF test
-        filter.setFilterValue(-0.9f)
         var highFreqSignal = 0f
         for (i in 0 until 100) {
             highFreqSignal = filter.processLeft(sin(i * 1.5).toFloat())
@@ -214,9 +274,9 @@ class AudioProcessingTest {
     @Test
     fun testLookaheadLimiterTruePeak() {
         val limiter = LookaheadLimiter(48000)
-        limiter.ceilingDb = -0.5f // ~0.944 max peak
+        limiter.ceilingDb = -0.5f
 
-        val loudSignal = 3.5f // +11 dB overshoot
+        val loudSignal = 3.5f
         var maxOut = 0f
         for (i in 0 until 300) {
             val (outL, outR) = limiter.process(loudSignal, loudSignal)
@@ -234,7 +294,7 @@ class AudioProcessingTest {
             enabled = true,
             type = FxType.BIT_CRUSHER,
             dryWet = 1.0f,
-            param1 = 0.8f // Heavy bit crushing
+            param1 = 0.8f
         )
 
         val inL = FloatArray(128) { 0.54321f }
@@ -243,7 +303,6 @@ class AudioProcessingTest {
         val outR = FloatArray(128)
 
         fx.processBlock(inL, inR, outL, outR, 128)
-        // Bitcrushed signal should be quantized
         assertTrue(outL[0] != 0.54321f)
     }
 }

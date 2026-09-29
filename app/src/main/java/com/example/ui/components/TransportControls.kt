@@ -87,14 +87,14 @@ fun TransportControls(
         ) {
             Column {
                 Text(
-                    text = String.format("%.1f", deckState.currentBpm),
+                    text = if (deckState.currentBpm > 0.0) String.format("%.1f", deckState.currentBpm) else "--.-",
                     color = Color.White,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace
                 )
                 Text(
-                    text = "BPM (${String.format("%+.1f%%", deckState.tempoPercent * deckState.pitchRange.maxPercent * 100)})",
+                    text = if (deckState.currentBpm > 0.0) "BPM (${String.format("%+.1f%%", deckState.tempoPercent * deckState.pitchRange.maxPercent * 100)})" else "NO BPM",
                     color = DjTextSecondary,
                     fontSize = 10.sp
                 )
@@ -102,7 +102,7 @@ fun TransportControls(
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = deckState.musicalKey,
+                    text = if (deckState.musicalKey.isNotBlank()) deckState.musicalKey else "--",
                     color = themeColor,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold

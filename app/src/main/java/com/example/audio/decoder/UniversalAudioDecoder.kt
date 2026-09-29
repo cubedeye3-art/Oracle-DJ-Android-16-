@@ -8,9 +8,9 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import android.util.Log
 import com.example.audio.model.AudioBuffer
 import com.example.audio.model.AudioMetadata
+import com.example.util.DjLogger
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -33,13 +33,13 @@ object UniversalAudioDecoder {
     )
 
     fun decodeUri(context: Context, uri: Uri): WavDecoder.DecodeResult {
-        Log.d(TAG_LOAD, "decodeUri called with URI: $uri")
+        DjLogger.d(TAG_LOAD, "decodeUri called with URI: $uri")
         val scheme = uri.scheme
         val uriStr = uri.toString()
 
         // 1. Probe metadata from ContentResolver or file
         val probed = probeMetadata(context, uri)
-        Log.d(
+        DjLogger.d(
             TAG_LOAD,
             "BEATENGINE_LOAD:\nURI=$uri\nTITLE=${probed.title}\nARTIST=${probed.artist}\nMIME=${probed.mimeType}\nSIZE=${probed.fileSize}"
         )
@@ -58,7 +58,7 @@ object UniversalAudioDecoder {
                 } ?: false
 
                 if (isRiff) {
-                    Log.d(TAG_DECODER, "RIFF/WAVE header verified. Routing to WavDecoder.")
+                    DjLogger.d(TAG_DECODER, "RIFF/WAVE header verified. Routing to WavDecoder.")
                     context.contentResolver.openInputStream(uri)?.use { fullStream ->
                         return WavDecoder.decode(
                             inputStream = fullStream,
@@ -69,11 +69,10 @@ object UniversalAudioDecoder {
                     }
                 }
             } catch (e: TrackLoadException) {
-                // If it's a specific track load exception from WavDecoder, rethrow unless fallback is viable
                 if (e.code == TrackLoadErrorCode.OUT_OF_MEMORY) throw e
-                Log.w(TAG_DECODER, "WavDecoder error: ${e.message}. Attempting MediaCodec fallback...")
+                DjLogger.w(TAG_DECODER, "WavDecoder error: ${e.message}. Attempting MediaCodec fallback...")
             } catch (e: Exception) {
-                Log.w(TAG_DECODER, "WavDecoder probe or decode failed, falling back to MediaCodec: ${e.message}")
+                DjLogger.w(TAG_DECODER, "WavDecoder probe or decode failed, falling back to MediaCodec: ${e.message}")
             }
         }
 
@@ -82,7 +81,7 @@ object UniversalAudioDecoder {
     }
 
     fun decodeFile(file: File): WavDecoder.DecodeResult {
-        Log.d(TAG_LOAD, "decodeFile called with file: ${file.absolutePath} (length: ${file.length()} bytes)")
+        DjLogger.d(TAG_LOAD, "decodeFile called with file: ${file.absolutePath} (length: ${file.length()} bytes)")
         if (!file.exists()) {
             throw TrackLoadException(TrackLoadErrorCode.FILE_NOT_FOUND, "File does not exist: ${file.absolutePath}")
         }
@@ -95,9 +94,9 @@ object UniversalAudioDecoder {
                 return WavDecoder.decode(file)
             } catch (e: TrackLoadException) {
                 if (e.code == TrackLoadErrorCode.OUT_OF_MEMORY) throw e
-                Log.w(TAG_DECODER, "WavDecoder failed on file, fallback to MediaCodec: ${e.message}")
+                DjLogger.w(TAG_DECODER, "WavDecoder failed on file, fallback to MediaCodec: ${e.message}")
             } catch (e: Exception) {
-                Log.w(TAG_DECODER, "WavDecoder failed on file, fallback to MediaCodec: ${e.message}")
+                DjLogger.w(TAG_DECODER, "WavDecoder failed on file, fallback to MediaCodec: ${e.message}")
             }
         }
 
@@ -108,7 +107,7 @@ object UniversalAudioDecoder {
             fileSize = file.length()
         )
 
-        Log.d(
+        DjLogger.d(
             TAG_LOAD,
             "BEATENGINE_LOAD:\nURI=${file.toURI()}\nTITLE=${probed.title}\nARTIST=${probed.artist}\nMIME=${probed.mimeType}\nSIZE=${probed.fileSize}"
         )
@@ -140,7 +139,7 @@ object UniversalAudioDecoder {
             try {
                 extractor.setDataSource(context, uri, null)
             } catch (e: Exception) {
-                Log.w(TAG_DECODER, "Direct extractor.setDataSource(context, uri, null) failed: ${e.message}. Trying openAssetFileDescriptor...")
+                DjLogger.w(TAG_DECODER, "Direct extractor.setDataSource(context, uri, null) failed: ${e.message}. Trying openAssetFileDescriptor...")
                 afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
                 if (afd != null) {
                     if (afd.declaredLength < 0) {
@@ -183,9 +182,7 @@ object UniversalAudioDecoder {
         } finally {
             try {
                 afd?.close()
-            } catch (e: Exception) {
-                // Ignore afd close error
-            }
+            } catch (_: Exception) {}
         }
     }
 
@@ -234,7 +231,7 @@ object UniversalAudioDecoder {
             probed.durationUs
         }
 
-        Log.d(
+        DjLogger.d(
             TAG_DECODER,
             "UniversalAudioDecoder:\nsource format=$format\ncodec=$mime\nsample rate=$initialSampleRate\nchannels=$initialChannels\nPCM encoding=UNKNOWN (pending output format)"
         )
@@ -253,7 +250,7 @@ object UniversalAudioDecoder {
             )
         }
 
-        Log.d(TAG_DECODER, "decode start")
+        DjLogger.d(TAG_DECODER, "decode start")
 
         val info = MediaCodec.BufferInfo()
         val pcmChunks = mutableListOf<FloatArray>()
@@ -267,17 +264,15 @@ object UniversalAudioDecoder {
 
         try {
             while (!outputEOS) {
-                // 1. Feed input buffer from extractor
                 if (!inputEOS) {
                     val inIndex = codec.dequeueInputBuffer(10000L)
                     if (inIndex >= 0) {
                         val inputBuffer = codec.getInputBuffer(inIndex)
                         if (inputBuffer != null) {
                             inputBuffer.clear()
-                            // CRITICAL: MediaExtractor.readSampleData must use offset 0
                             val sampleSize = extractor.readSampleData(inputBuffer, 0)
                             if (sampleSize < 0) {
-                                Log.d(TAG_DECODER, "MediaExtractor reached input EOS, queuing BUFFER_FLAG_END_OF_STREAM")
+                                DjLogger.d(TAG_DECODER, "MediaExtractor reached input EOS, queuing BUFFER_FLAG_END_OF_STREAM")
                                 codec.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputEOS = true
                             } else {
@@ -288,12 +283,11 @@ object UniversalAudioDecoder {
                     }
                 }
 
-                // 2. Drain output buffer from decoder
                 val outIndex = codec.dequeueOutputBuffer(info, 10000L)
                 when (outIndex) {
                     MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         val newFormat = codec.outputFormat
-                        Log.d(TAG_DECODER, "output format changed: $newFormat")
+                        DjLogger.d(TAG_DECODER, "output format changed: $newFormat")
                         if (newFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
                             decodedSampleRate = newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         }
@@ -303,7 +297,7 @@ object UniversalAudioDecoder {
                         if (newFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                             pcmEncoding = newFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
                         }
-                        Log.d(
+                        DjLogger.d(
                             TAG_DECODER,
                             "UniversalAudioDecoder updated format: sampleRate=$decodedSampleRate, channels=$decodedChannels, pcmEncoding=$pcmEncoding"
                         )
@@ -312,7 +306,7 @@ object UniversalAudioDecoder {
                     MediaCodec.INFO_TRY_AGAIN_LATER -> {
                         consecutiveNoOutput++
                         if (inputEOS && consecutiveNoOutput > 60) {
-                            Log.w(TAG_DECODER, "Decoder drain timed out after input EOS. Ending decode loop.")
+                            DjLogger.w(TAG_DECODER, "Decoder drain timed out after input EOS. Ending decode loop.")
                             outputEOS = true
                         }
                     }
@@ -335,7 +329,7 @@ object UniversalAudioDecoder {
                             codec.releaseOutputBuffer(outIndex, false)
 
                             if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                Log.d(TAG_DECODER, "Output BUFFER_FLAG_END_OF_STREAM received. Decoding complete.")
+                                DjLogger.d(TAG_DECODER, "Output BUFFER_FLAG_END_OF_STREAM received. Decoding complete.")
                                 outputEOS = true
                             }
                         }
@@ -354,25 +348,13 @@ object UniversalAudioDecoder {
                 e
             )
         } finally {
-            try {
-                codec.stop()
-            } catch (e: Exception) {
-                // Ignore
-            }
-            try {
-                codec.release()
-            } catch (e: Exception) {
-                // Ignore
-            }
-            try {
-                extractor.release()
-            } catch (e: Exception) {
-                // Ignore
-            }
+            try { codec.stop() } catch (_: Exception) {}
+            try { codec.release() } catch (_: Exception) {}
+            try { extractor.release() } catch (_: Exception) {}
         }
 
         val totalSamples = pcmChunks.sumOf { it.size.toLong() }
-        Log.d(TAG_DECODER, "decoded frames/sample count: totalSamples=$totalSamples, channels=$decodedChannels")
+        DjLogger.d(TAG_DECODER, "decoded frames/sample count: totalSamples=$totalSamples, channels=$decodedChannels")
 
         if (totalSamples == 0L) {
             throw TrackLoadException(
@@ -450,7 +432,7 @@ object UniversalAudioDecoder {
             else -> 16
         }
 
-        Log.d(
+        DjLogger.d(
             TAG_DECODER,
             "decode complete: sampleRate=$decodedSampleRate, channels=$decodedChannels, bitDepth=$bitDepth, duration=${durationSec}s"
         )
@@ -478,14 +460,10 @@ object UniversalAudioDecoder {
             channels = decodedChannels
         )
 
-        Log.d(TAG_DECODER, "AudioBuffer created: $buffer")
+        DjLogger.d(TAG_DECODER, "AudioBuffer created: $buffer")
         return WavDecoder.DecodeResult(buffer, metadata)
     }
 
-    /**
-     * Converts a decoded MediaCodec ByteBuffer into normalized 32-bit float array.
-     * Supports FLOAT, 16BIT, 8BIT, 24BIT, 32BIT PCM.
-     */
     private fun decodePcmBufferToFloats(
         buffer: ByteBuffer,
         pcmEncoding: Int,
@@ -541,7 +519,6 @@ object UniversalAudioDecoder {
                 floats
             }
             else -> {
-                // Fallback default: 16-bit PCM
                 val sb = le.asShortBuffer()
                 val remaining = sb.remaining()
                 val floats = FloatArray(remaining)
@@ -600,7 +577,7 @@ object UniversalAudioDecoder {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG_DECODER, "Could not query ContentResolver for metadata: ${e.message}")
+            DjLogger.w(TAG_DECODER, "Could not query ContentResolver for metadata: ${e.message}")
         }
 
         if (mimeType.isBlank()) {

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -47,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.audio.decoder.TrackLoadError
 import com.example.audio.model.DeckId
+import com.example.data.LibraryAnalysisProgress
 import com.example.data.TrackEntity
 import com.example.ui.theme.DeckAPrimary
 import com.example.ui.theme.DeckBPrimary
@@ -67,6 +70,8 @@ fun MusicLibrarySheet(
     trackLoadError: TrackLoadError? = null,
     onDismissError: () -> Unit = {},
     isLoadingTrack: Boolean = false,
+    analysisProgress: LibraryAnalysisProgress = LibraryAnalysisProgress(),
+    onScanAndAnalyseClicked: () -> Unit = {},
     onDeleteTrack: ((Long) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -76,6 +81,7 @@ fun MusicLibrarySheet(
         else tracks.filter {
             it.title.contains(searchQuery, ignoreCase = true) ||
             it.artist.contains(searchQuery, ignoreCase = true) ||
+            it.album.contains(searchQuery, ignoreCase = true) ||
             it.musicalKey.contains(searchQuery, ignoreCase = true) ||
             it.formatName.contains(searchQuery, ignoreCase = true)
         }
@@ -91,7 +97,7 @@ fun MusicLibrarySheet(
             .testTag("music_library_section"),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Top Toolbar: Header + Import + Rescan
+        // Top Toolbar: Header + Action Buttons
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -102,7 +108,7 @@ fun MusicLibrarySheet(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "OFFLINE MUSIC LIBRARY",
+                    text = "BEATENGINE MUSIC LIBRARY",
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
@@ -116,7 +122,35 @@ fun MusicLibrarySheet(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Dedicated SCAN & ANALYSE LIBRARY button
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (analysisProgress.isRunning) Color(0xFF382A12) else Color(0xFF281C38))
+                        .border(1.dp, if (analysisProgress.isRunning) Color(0xFFFFD600) else Color(0xFFD500F9), RoundedCornerShape(4.dp))
+                        .clickable(enabled = !analysisProgress.isRunning) { onScanAndAnalyseClicked() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("btn_scan_and_analyse"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Analytics,
+                            contentDescription = "Scan & Analyse",
+                            tint = if (analysisProgress.isRunning) Color(0xFFFFD600) else Color(0xFFD500F9),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = if (analysisProgress.isRunning) "ANALYSING..." else "SCAN & ANALYSE",
+                            color = if (analysisProgress.isRunning) Color(0xFFFFD600) else Color(0xFFD500F9),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                }
+
                 // Import file button
                 Box(
                     modifier = Modifier
@@ -133,10 +167,10 @@ fun MusicLibrarySheet(
                             Icons.Default.FileOpen,
                             contentDescription = "Import Audio File",
                             tint = DjGreenSync,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("IMPORT", color = DjGreenSync, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("IMPORT", color = DjGreenSync, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -156,10 +190,99 @@ fun MusicLibrarySheet(
                             Icons.Default.Refresh,
                             contentDescription = "Rescan MediaStore",
                             tint = Color.White,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("RESCAN", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("RESCAN", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Dedicated Library Analysis Progress HUD Card
+        AnimatedVisibility(visible = analysisProgress.isRunning || analysisProgress.progressPercent >= 1.0f && analysisProgress.analysedCount > 0) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF141324))
+                    .border(1.dp, Color(0xFF6200EA), RoundedCornerShape(6.dp))
+                    .padding(8.dp)
+                    .testTag("library_analysis_hud")
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (analysisProgress.isRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = Color(0xFFD500F9),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                            Text(
+                                text = "LIBRARY BPM & KEY ANALYSIS ENGINE",
+                                color = Color(0xFFD500F9),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                        Text(
+                            text = "${(analysisProgress.progressPercent * 100).toInt()}%",
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    LinearProgressIndicator(
+                        progress = { analysisProgress.progressPercent.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = Color(0xFFD500F9),
+                        trackColor = Color(0xFF281C38)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Tracks: ${analysisProgress.totalTracks} | Scanned: ${analysisProgress.scannedCount} | Analysed: ${analysisProgress.analysedCount} | Cached: ${analysisProgress.cachedCount} | Failed: ${analysisProgress.failedCount}",
+                            color = DjTextSecondary,
+                            fontSize = 8.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    if (analysisProgress.currentTrackTitle.isNotBlank()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Current: ${analysisProgress.currentTrackTitle}",
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (analysisProgress.currentBpm > 0.0) {
+                                Text(
+                                    text = "${String.format("%.1f", analysisProgress.currentBpm)} BPM • ${analysisProgress.currentKey}",
+                                    color = DjGreenSync,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -329,7 +452,7 @@ fun MusicLibrarySheet(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Use IMPORT or RESCAN to load audio files into the library.",
+                        text = "Use IMPORT or SCAN & ANALYSE to load and process audio files.",
                         color = DjTextSecondary.copy(alpha = 0.7f),
                         fontSize = 9.sp
                     )
@@ -367,6 +490,15 @@ private fun TrackListItem(
     val durationSec = track.durationSeconds.toInt()
     val durStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
 
+    val bpmText = if (track.bpm > 0.0) {
+        val confPct = (track.bpmConfidence * 100).toInt()
+        "${String.format("%.1f", track.bpm)} BPM" + if (confPct > 0) " ($confPct%)" else ""
+    } else {
+        "-- BPM"
+    }
+
+    val keyText = if (track.musicalKey.isNotBlank()) track.musicalKey else "--"
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -392,9 +524,9 @@ private fun TrackListItem(
             ) {
                 Text(track.artist, color = DjTextSecondary, fontSize = 10.sp, maxLines = 1)
                 Text("•", color = DjTextSecondary, fontSize = 8.sp)
-                Text("${String.format("%.1f", track.bpm)} BPM", color = DjGreenSync, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(bpmText, color = if (track.bpm > 0) DjGreenSync else DjTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Text("•", color = DjTextSecondary, fontSize = 8.sp)
-                Text(track.musicalKey, color = DeckAPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(keyText, color = DeckAPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Text("•", color = DjTextSecondary, fontSize = 8.sp)
                 Text(durStr, color = DjTextSecondary, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
             }

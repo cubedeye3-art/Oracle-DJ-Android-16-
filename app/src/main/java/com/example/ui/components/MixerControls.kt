@@ -51,6 +51,7 @@ fun MixerControls(
     onCrossfaderCurveChange: (CrossfaderCurve) -> Unit,
     onCrossfaderAssignChange: (DeckId, CrossfaderAssign) -> Unit,
     onMasterGainChange: (Float) -> Unit,
+    onCueMonitorToggle: (DeckId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -79,6 +80,7 @@ fun MixerControls(
                 fader = mixerState.channelA.fader,
                 vuLevel = maxOf(mixerState.channelA.vuLevelL, mixerState.channelA.vuLevelR),
                 assign = mixerState.channelA.crossfaderAssign,
+                cueMonitor = mixerState.channelA.cueMonitor,
                 onGainChange = { onGainChange(DeckId.DECK_A, it) },
                 onEqHighChange = { onEqChange(DeckId.DECK_A, mixerState.channelA.low, mixerState.channelA.mid, it) },
                 onEqMidChange = { onEqChange(DeckId.DECK_A, mixerState.channelA.low, it, mixerState.channelA.high) },
@@ -86,6 +88,7 @@ fun MixerControls(
                 onFilterChange = { onFilterChange(DeckId.DECK_A, it) },
                 onFaderChange = { onFaderChange(DeckId.DECK_A, it) },
                 onAssignChange = { onCrossfaderAssignChange(DeckId.DECK_A, it) },
+                onCueMonitorToggle = { onCueMonitorToggle(DeckId.DECK_A) },
                 testTagPrefix = "ch1",
                 modifier = Modifier.weight(1f)
             )
@@ -111,6 +114,7 @@ fun MixerControls(
                 fader = mixerState.channelB.fader,
                 vuLevel = maxOf(mixerState.channelB.vuLevelL, mixerState.channelB.vuLevelR),
                 assign = mixerState.channelB.crossfaderAssign,
+                cueMonitor = mixerState.channelB.cueMonitor,
                 onGainChange = { onGainChange(DeckId.DECK_B, it) },
                 onEqHighChange = { onEqChange(DeckId.DECK_B, mixerState.channelB.low, mixerState.channelB.mid, it) },
                 onEqMidChange = { onEqChange(DeckId.DECK_B, mixerState.channelB.low, it, mixerState.channelB.high) },
@@ -118,6 +122,7 @@ fun MixerControls(
                 onFilterChange = { onFilterChange(DeckId.DECK_B, it) },
                 onFaderChange = { onFaderChange(DeckId.DECK_B, it) },
                 onAssignChange = { onCrossfaderAssignChange(DeckId.DECK_B, it) },
+                onCueMonitorToggle = { onCueMonitorToggle(DeckId.DECK_B) },
                 testTagPrefix = "ch2",
                 modifier = Modifier.weight(1f)
             )
@@ -208,6 +213,7 @@ private fun ChannelStrip(
     fader: Float,
     vuLevel: Float,
     assign: CrossfaderAssign,
+    cueMonitor: Boolean = false,
     onGainChange: (Float) -> Unit,
     onEqHighChange: (Float) -> Unit,
     onEqMidChange: (Float) -> Unit,
@@ -215,6 +221,7 @@ private fun ChannelStrip(
     onFilterChange: (Float) -> Unit,
     onFaderChange: (Float) -> Unit,
     onAssignChange: (CrossfaderAssign) -> Unit,
+    onCueMonitorToggle: () -> Unit = {},
     testTagPrefix: String,
     modifier: Modifier = Modifier
 ) {
@@ -235,29 +242,55 @@ private fun ChannelStrip(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Crossfader Assign Toggle
+        // Crossfader Assign & Headphone CUE Monitor Row
         Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color(0xFF1E2232))
-                .padding(2.dp)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf(CrossfaderAssign.DECK_A, CrossfaderAssign.THRU, CrossfaderAssign.DECK_B).forEach { a ->
-                val selected = assign == a
+            // Crossfader Assign Toggle
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF1E2232))
+                    .padding(2.dp)
+            ) {
+                listOf(CrossfaderAssign.DECK_A, CrossfaderAssign.THRU, CrossfaderAssign.DECK_B).forEach { a ->
+                    val selected = assign == a
+                    Text(
+                        text = when (a) {
+                            CrossfaderAssign.DECK_A -> "A"
+                            CrossfaderAssign.THRU -> "T"
+                            CrossfaderAssign.DECK_B -> "B"
+                        },
+                        color = if (selected) Color.White else DjTextSecondary,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(if (selected) accentColor else Color.Transparent)
+                            .clickable { onAssignChange(a) }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // Headphone Cue / PFL Monitor Button
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (cueMonitor) Color(0xFFFFD600) else Color(0xFF1E2232))
+                    .border(1.dp, if (cueMonitor) Color(0xFFFFD600) else DjBorder, RoundedCornerShape(4.dp))
+                    .clickable { onCueMonitorToggle() }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .testTag("${testTagPrefix}_cue_monitor"),
+                contentAlignment = Alignment.Center
+            ) {
                 Text(
-                    text = when (a) {
-                        CrossfaderAssign.DECK_A -> "A"
-                        CrossfaderAssign.THRU -> "T"
-                        CrossfaderAssign.DECK_B -> "B"
-                    },
-                    color = if (selected) Color.White else DjTextSecondary,
+                    text = "CUE",
+                    color = if (cueMonitor) Color.Black else DjTextSecondary,
                     fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(if (selected) accentColor else Color.Transparent)
-                        .clickable { onAssignChange(a) }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                    fontWeight = FontWeight.Black
                 )
             }
         }

@@ -96,6 +96,7 @@ fun DjMainScreen(viewModel: DjViewModel) {
     val hasMediaPermission by viewModel.hasMediaPermission.collectAsState()
     val trackLoadError by viewModel.trackLoadError.collectAsState()
     val isLoadingTrack by viewModel.isLoadingTrack.collectAsState()
+    val libraryAnalysisProgress by viewModel.libraryAnalysisProgress.collectAsState()
 
     var activeTab by remember { mutableStateOf(DjNavTab.DECKS) }
     var showRecordDialog by remember { mutableStateOf(false) }
@@ -157,20 +158,27 @@ fun DjMainScreen(viewModel: DjViewModel) {
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "ORACLE",
+                            text = "BEAT",
                             color = Color(0xFF00E5FF),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Black
                         )
                         Text(
-                            text = "DJ",
+                            text = "ENGINE",
                             color = Color(0xFFFF0055),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Black
                         )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "PRO",
+                            color = Color(0xFFFFD600),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "ORACLE DJ PRO WORKSTATION",
+                            text = "PRO DJ WORKSTATION",
                             color = DjTextSecondary,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold
@@ -362,6 +370,14 @@ fun DjMainScreen(viewModel: DjViewModel) {
                                 trackLoadError = trackLoadError,
                                 onDismissError = { viewModel.clearTrackLoadError() },
                                 isLoadingTrack = isLoadingTrack,
+                                analysisProgress = libraryAnalysisProgress,
+                                onScanAndAnalyseClicked = {
+                                    if (hasMediaPermission) {
+                                        viewModel.scanAndAnalyseLibrary()
+                                    } else {
+                                        permissionLauncher.launch(mediaPermission)
+                                    }
+                                },
                                 onDeleteTrack = { viewModel.deleteTrack(it) }
                             )
                         }
@@ -525,6 +541,7 @@ fun DjMainScreen(viewModel: DjViewModel) {
                         onCrossfaderCurveChange = { viewModel.setCrossfaderCurve(it) },
                         onCrossfaderAssignChange = { d, a -> viewModel.setCrossfaderAssign(d, a) },
                         onMasterGainChange = { viewModel.setMasterGain(it) },
+                        onCueMonitorToggle = { viewModel.toggleCueMonitor(it) },
                         modifier = Modifier
                             .weight(1.4f)
                             .fillMaxHeight()
@@ -782,7 +799,8 @@ fun DjMainScreen(viewModel: DjViewModel) {
                                 onCrossfaderChange = { viewModel.setCrossfader(it) },
                                 onCrossfaderCurveChange = { viewModel.setCrossfaderCurve(it) },
                                 onCrossfaderAssignChange = { d, a -> viewModel.setCrossfaderAssign(d, a) },
-                                onMasterGainChange = { viewModel.setMasterGain(it) }
+                                onMasterGainChange = { viewModel.setMasterGain(it) },
+                                onCueMonitorToggle = { viewModel.toggleCueMonitor(it) }
                             )
                         }
 
@@ -840,6 +858,14 @@ fun DjMainScreen(viewModel: DjViewModel) {
                                 trackLoadError = trackLoadError,
                                 onDismissError = { viewModel.clearTrackLoadError() },
                                 isLoadingTrack = isLoadingTrack,
+                                analysisProgress = libraryAnalysisProgress,
+                                onScanAndAnalyseClicked = {
+                                    if (hasMediaPermission) {
+                                        viewModel.scanAndAnalyseLibrary()
+                                    } else {
+                                        permissionLauncher.launch(mediaPermission)
+                                    }
+                                },
                                 onDeleteTrack = { viewModel.deleteTrack(it) }
                             )
                         }

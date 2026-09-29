@@ -1,16 +1,35 @@
 package com.example.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "tracks")
+@Entity(
+    tableName = "tracks",
+    indices = [
+        Index(value = ["filePath"], unique = true),
+        Index(value = ["title"]),
+        Index(value = ["artist"]),
+        Index(value = ["bpm"]),
+        Index(value = ["musicalKey"]),
+        Index(value = ["analysisVersion"])
+    ]
+)
 data class TrackEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
     val artist: String = "Unknown",
+    val album: String = "",
     val durationSeconds: Double = 0.0,
-    val bpm: Double = 126.0,
-    val musicalKey: String = "8A / Am",
+    val bpm: Double = 0.0, // 0.0 represents unknown / failed / unanalyzed
+    val bpmConfidence: Float = 0.0f,
+    val musicalKey: String = "",
+    val keyConfidence: Float = 0.0f,
+    val beatInterval: Double = 0.0,
+    val firstBeatOffset: Double = 0.0,
+    val analysisVersion: Int = 0,
+    val analysisTimestamp: Long = 0L,
+    val fileModifiedTimestamp: Long = 0L,
     val filePath: String,
     val sampleRate: Int = 48000,
     val bitDepth: Int = 24,

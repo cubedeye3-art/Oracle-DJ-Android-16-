@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Oracle DJ"
+rootProject.name = "BeatEngine Pro"
 
 include(":app")

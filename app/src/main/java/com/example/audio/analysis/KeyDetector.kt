@@ -1,34 +1,36 @@
 package com.example.audio.analysis
 
 import com.example.audio.model.AudioBuffer
+import com.example.util.DjLogger
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
 object KeyDetector {
 
+    const val ANALYSIS_VERSION = 2
+    private const val TAG = "KeyDetector"
+
     data class KeyResult(
         val keyName: String,
         val camelotCode: String,
-        val isMinor: Boolean
+        val isMinor: Boolean,
+        val confidence: Float = 0.0f,
+        val analysisVersion: Int = ANALYSIS_VERSION
     )
 
-    // Musical note names
     private val NOTE_NAMES = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
     // Krumhansl-Kessler key profiles
     private val MAJOR_PROFILE = doubleArrayOf(6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
     private val MINOR_PROFILE = doubleArrayOf(6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
 
-    // Camelot mappings
-    // Major (B)
     private val CAMELOT_MAJOR = mapOf(
         "B" to "1B", "F#" to "2B", "Db" to "3B", "C#" to "3B", "Ab" to "4B", "G#" to "4B",
         "Eb" to "5B", "D#" to "5B", "Bb" to "6B", "A#" to "6B", "F" to "7B", "C" to "8B",
         "G" to "9B", "D" to "10B", "A" to "11B", "E" to "12B"
     )
 
-    // Minor (A)
     private val CAMELOT_MINOR = mapOf(
         "Abm" to "1A", "G#m" to "1A", "Ebm" to "2A", "D#m" to "2A", "Bbm" to "3A", "A#m" to "3A",
         "Fm" to "4A", "Cm" to "5A", "Gm" to "6A", "Dm" to "7A", "Am" to "8A",
@@ -38,8 +40,9 @@ object KeyDetector {
     fun detect(buffer: AudioBuffer): KeyResult {
         val totalFrames = buffer.frameCount
         val sampleRate = buffer.sampleRate
-        if (totalFrames <= 0) {
-            return KeyResult("Am", "8A", true)
+        if (totalFrames <= 0 || sampleRate <= 0) {
+            DjLogger.w(TAG, "Empty or invalid buffer passed to KeyDetector")
+            return KeyResult("", "", false, 0.0f, ANALYSIS_VERSION)
         }
 
         // Aggregate 12 chroma bins across octaves (130Hz - 1000Hz)
@@ -73,12 +76,16 @@ object KeyDetector {
         // Normalize chroma
         var chromaSum = 0.0
         for (c in chroma) chromaSum += c
-        if (chromaSum > 0) {
-            for (k in 0 until 12) chroma[k] /= chromaSum
+        if (chromaSum <= 0.00001) {
+            DjLogger.w(TAG, "Key detection: zero energy chroma spectrum")
+            return KeyResult("", "", false, 0.0f, ANALYSIS_VERSION)
         }
+
+        for (k in 0 until 12) chroma[k] /= chromaSum
 
         // Correlate with 12 major and 12 minor keys
         var bestCorrelation = -Double.MAX_VALUE
+        var secondCorrelation = -Double.MAX_VALUE
         var bestKeyName = "Am"
         var isMinorBest = true
 
@@ -90,9 +97,12 @@ object KeyDetector {
                 corrMajor += chroma[chromaIdx] * MAJOR_PROFILE[stepNote]
             }
             if (corrMajor > bestCorrelation) {
+                secondCorrelation = bestCorrelation
                 bestCorrelation = corrMajor
                 bestKeyName = NOTE_NAMES[root]
                 isMinorBest = false
+            } else if (corrMajor > secondCorrelation) {
+                secondCorrelation = corrMajor
             }
 
             // Minor
@@ -102,9 +112,12 @@ object KeyDetector {
                 corrMinor += chroma[chromaIdx] * MINOR_PROFILE[stepNote]
             }
             if (corrMinor > bestCorrelation) {
+                secondCorrelation = bestCorrelation
                 bestCorrelation = corrMinor
                 bestKeyName = NOTE_NAMES[root] + "m"
                 isMinorBest = true
+            } else if (corrMinor > secondCorrelation) {
+                secondCorrelation = corrMinor
             }
         }
 
@@ -114,6 +127,12 @@ object KeyDetector {
             CAMELOT_MAJOR[bestKeyName] ?: "8B"
         }
 
-        return KeyResult(bestKeyName, camelot, isMinorBest)
+        // Confidence based on difference from runner-up key
+        val separation = if (bestCorrelation > 0) (bestCorrelation - secondCorrelation) / bestCorrelation else 0.0
+        val confidence = (separation * 2.5).toFloat().coerceIn(0.1f, 1.0f)
+
+        DjLogger.d(TAG, "KEY DETECTED: $camelot / $bestKeyName (confidence=$confidence, version=$ANALYSIS_VERSION)")
+
+        return KeyResult(bestKeyName, camelot, isMinorBest, confidence, ANALYSIS_VERSION)
     }
 }

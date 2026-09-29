@@ -1,8 +1,8 @@
 package com.example.audio.decoder
 
-import android.util.Log
 import com.example.audio.model.AudioBuffer
 import com.example.audio.model.AudioMetadata
+import com.example.util.DjLogger
 import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
@@ -13,13 +13,15 @@ import kotlin.math.sqrt
 
 object WavDecoder {
 
+    private const val TAG = "WavDecoder"
+
     data class DecodeResult(
         val buffer: AudioBuffer,
         val metadata: AudioMetadata
     )
 
     fun decode(file: File): DecodeResult {
-        Log.d("WavDecoder", "WavDecoder: decode called for file: ${file.absolutePath} (size: ${file.length()} bytes)")
+        DjLogger.d(TAG, "WavDecoder: decode called for file: ${file.absolutePath} (size: ${file.length()} bytes)")
         if (!file.exists()) {
             throw TrackLoadException(TrackLoadErrorCode.FILE_NOT_FOUND, "WAV file does not exist: ${file.absolutePath}")
         }
@@ -34,7 +36,7 @@ object WavDecoder {
         fileSizeBytes: Long = 0L,
         filePath: String = ""
     ): DecodeResult {
-        Log.d("WavDecoder", "WavDecoder: decode start for $filename ($filePath)")
+        DjLogger.d(TAG, "WavDecoder: decode start for $filename ($filePath)")
 
         val bytes: ByteArray
         try {
@@ -100,11 +102,10 @@ object WavDecoder {
                         bitsPerSample = byteBuffer.getShort(chunkDataStart + 14).toInt() and 0xFFFF
 
                         if (audioFormat == 65534 && chunkSize >= 40 && chunkDataStart + 26 <= bytes.size) {
-                            // WAVE_FORMAT_EXTENSIBLE: subFormat GUID first two bytes is format code
                             val subFormat = byteBuffer.getShort(chunkDataStart + 24).toInt() and 0xFFFF
                             audioFormat = subFormat
                         }
-                        Log.d("WavDecoder", "WavDecoder: fmt chunk parsed - format=$audioFormat, channels=$channels, sampleRate=$sampleRate, bitsPerSample=$bitsPerSample")
+                        DjLogger.d(TAG, "fmt chunk: format=$audioFormat, channels=$channels, sampleRate=$sampleRate, bitsPerSample=$bitsPerSample")
                     }
                 }
                 "data" -> {
@@ -114,12 +115,11 @@ object WavDecoder {
                     } else {
                         bytes.size - chunkDataStart
                     }
-                    Log.d("WavDecoder", "WavDecoder: data chunk found at offset $dataOffset, size $dataSize")
+                    DjLogger.d(TAG, "data chunk found at offset $dataOffset, size $dataSize")
                     break
                 }
             }
             offset = chunkDataStart + chunkSize
-            // Word alignment: if chunk size is odd, skip 1 padding byte
             if (chunkSize % 2 != 0) {
                 offset++
             }
@@ -168,7 +168,6 @@ object WavDecoder {
             for (c in 0 until channels) {
                 val sampleValue: Float = when (bitsPerSample) {
                     8 -> {
-                        // 8-bit WAV is unsigned PCM (0..255, 128 is 0.0)
                         val uVal = bytes[readPos].toInt() and 0xFF
                         readPos += 1
                         (uVal - 128) / 128.0f
@@ -189,12 +188,10 @@ object WavDecoder {
                     }
                     32 -> {
                         if (audioFormat == 3) {
-                            // 32-bit IEEE float
                             val fVal = byteBuffer.getFloat(readPos)
                             readPos += 4
                             fVal
                         } else {
-                            // 32-bit signed integer
                             val iVal = byteBuffer.getInt(readPos)
                             readPos += 4
                             (iVal.toDouble() / 2147483648.0).toFloat()
@@ -209,7 +206,7 @@ object WavDecoder {
                 if (c == 0) {
                     left[i] = sampleValue
                     if (channels == 1) {
-                        right[i] = sampleValue // Mono duplicate to right
+                        right[i] = sampleValue
                     }
                 } else if (c == 1) {
                     right[i] = sampleValue
@@ -236,7 +233,7 @@ object WavDecoder {
             else -> "WAV ${bitsPerSample}-bit"
         }
 
-        Log.d("WavDecoder", "WavDecoder: decode complete - format=$formatDesc, sampleRate=$sampleRate, channels=$channels, frames=$totalFrames, duration=${durationSec}s")
+        DjLogger.d(TAG, "decode complete: format=$formatDesc, sampleRate=$sampleRate, channels=$channels, frames=$totalFrames, duration=${durationSec}s")
 
         val metadata = AudioMetadata(
             title = filename.substringBeforeLast("."),
@@ -261,7 +258,7 @@ object WavDecoder {
             channels = channels
         )
 
-        Log.d("WavDecoder", "AudioBuffer created: $buffer")
+        DjLogger.d(TAG, "AudioBuffer created: $buffer")
         return DecodeResult(buffer, metadata)
     }
 }
